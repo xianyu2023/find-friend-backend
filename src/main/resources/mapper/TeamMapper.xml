@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.yupi.springbootinit.mapper.TeamMapper">
+
+    <resultMap id="BaseResultMap" type="com.yupi.springbootinit.model.entity.Team">
+            <id property="id" column="id" jdbcType="BIGINT"/>
+            <result property="teamName" column="teamName" jdbcType="VARCHAR"/>
+            <result property="teamDescription" column="teamDescription" jdbcType="VARCHAR"/>
+            <result property="maxNum" column="maxNum" jdbcType="INTEGER"/>
+            <result property="expireTime" column="expireTime" jdbcType="TIMESTAMP"/>
+            <result property="leaderId" column="leaderId" jdbcType="BIGINT"/>
+            <result property="teamStatus" column="teamStatus" jdbcType="INTEGER"/>
+            <result property="teamPassword" column="teamPassword" jdbcType="VARCHAR"/>
+            <result property="createTime" column="createTime" jdbcType="TIMESTAMP"/>
+            <result property="updateTime" column="updateTime" jdbcType="TIMESTAMP"/>
+            <result property="deleted" column="deleted" jdbcType="TINYINT"/>
+    </resultMap>
+
+    <sql id="Base_Column_List">
+        id,teamName,teamDescription,
+        maxNum,expireTime,leaderId,
+        teamStatus,teamPassword,createTime,
+        updateTime,deleted
+    </sql>
+</mapper>
