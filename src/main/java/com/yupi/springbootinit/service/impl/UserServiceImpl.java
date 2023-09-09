@@ -29,6 +29,7 @@ import lombok.extern.slf4j.Slf4j;
 import me.chanjar.weixin.common.bean.WxOAuth2UserInfo;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.math3.util.Pair;
+import org.jetbrains.annotations.NotNull;
 import org.springframework.beans.BeanUtils;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
@@ -451,80 +452,174 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         return userVOPage;
     }
 
-
-    @Override
-    public List<UserVO> matchUser(Integer num,User loginUser) {
-        //取出所有的用户，然后依次和当前用户进行匹配（匹配：通过标签进行一个相似度计算（算法实现）)
-        //solved查询数据库很慢。查询所有，内存不足.
+    /**
+     * 用户未设置标签，直接返回默认top N推荐用户
+     * @param num
+     * @return
+     */
+    public List<UserVO> getDefaultTopN(Integer num) {
         QueryWrapper<User> queryWrapper = new QueryWrapper<>();
-        //不查询tags为null的。只查询id、tags字段。
-        queryWrapper.isNotNull("tags");
-        queryWrapper.select("id","tags");
-        List<User> userList = this.list(queryWrapper);
-        //gson可用于：json字符串=>json对象，java对象
-        Gson gson = new Gson();
-        //标签列表：json字符串 => 标签列表对象：java对象，List<String>对象
-        String tags = loginUser.getTags();
-        //loginUser可能是一个新用户，没有设置tags标签列表
-        if (StringUtils.isBlank(tags)) {
-            throw new BusinessException(ErrorCode.PARAMS_ERROR,"当前用户没有设置自身标签");
+        Page<User> userAllPage = this.page(new Page<>(1, num), queryWrapper);
+        if (userAllPage == null) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR);
         }
-        List<String> tagList1 = gson.fromJson(tags, new TypeToken<List<String>>() {
-        }.getType());
-        //用户列表下标——相似度（距离）
-        /*
-        这个map的默认排序规则是什么？设想它是根据value已经把map中的所有entry给排序好了的
-        实际结果：压根没有排序好。且map比较占用空间
-         */
-//        SortedMap<Integer, Long> indexDistacneMap = new TreeMap<>();
-        //todo 这里的indexDistacneList其实是存储了所有符合条件用户的下标-相似度分数，包括那些相似度分数比较低的（没必要存储相似度低的），比较占用内存空间
-        //解决方法：维护固定长度的数组或者有序集合，以时间换空间，就是耗费更多时间
-        List<Pair<Long,Long>> indexDistacneList = new ArrayList<>();
-        for (int i = 0; i < userList.size(); i++) {
-            User user = userList.get(i);
-            String strTags = user.getTags();
-            Long userId = user.getId();
-            //1.排除和自己匹配。2.用户没有标签列表，没必要进行标签的相似度匹配
-            if (loginUser.getId().equals(userId) || StringUtils.isBlank(strTags)) {
-                continue;
-            }
-            List<String> tagList2 = gson.fromJson(strTags, new TypeToken<List<String>>() {
-            }.getType());
-            //编辑距离算法。距离越小，相似度分数越高。把距离从小到低排序。取top N个用户（相似度最高）
-            //todo yupi为啥选用long接收
-            long distance = AlgorithmUtils.minDistance(tagList1, tagList2);
-            //想办法暂时保存distance和对应的用户（用索引代替用户，节省内存空间。刚好这里的list用户列表的下标就可以当作用户的索引）
-            //下标——相似度
-            indexDistacneList.add(new Pair<>(userId,distance));
-        }
-        //给List列表排序(a-b，从小到大)，并取TOP N
-        List<Long> sortedIndexList = indexDistacneList.stream()
-                .sorted((a, b) -> (int) (a.getValue() - b.getValue()))
-                .limit(num)
-                .map(Pair::getKey)
-                .collect(Collectors.toList());
-//        List<Integer> matchIndexList = indexDistacneMap.keySet().stream().limit(num).collect(Collectors.toList());
-        //todo getSafetyUser待更新
-        //userList是直接从数据库查询出来的，未经过脱敏处理
-        //匹配好的用户id列表（有匹配顺序）
-//        List<Long> matchIdList = sortedIndexList.stream()
-//                .map(index -> userList.get(index).getId())
-//                .collect(Collectors.toList());
-        QueryWrapper<User> queryWrapper1 = new QueryWrapper<>();
-        queryWrapper1.in("id",sortedIndexList);
-        //重新这样查询后的用户列表不具有匹配顺序,通过stream的分组功能给每个用户添加一个用户id作为key，形成一个map
-        //由于id是唯一的，所以分组后，每个key（id）对应的List<User>其实只有一个User对象
-        //无序的map，但它可以通过有序的key来取值，通过流最终形成一个有序的value列表
-        Map<Long, List<UserVO>> idUserMap = this.list(queryWrapper1).stream()
-                .map(user -> getUserVO(user))
-                .collect(Collectors.groupingBy(UserVO::getId));
-        List<UserVO> finalUserList = sortedIndexList.stream().map(sortedId -> {
-            return idUserMap.get(sortedId).get(0);
-        }).collect(Collectors.toList());
-        return finalUserList;
+        return getUserVO(userAllPage.getRecords());
     }
 
 
+    @Override
+    public List<UserVO> matchUser(Integer num,User loginUser) {
+        //tags标签列表json字符串=>标签列表对象
+        Gson gson = new Gson();
+        String currentUserTags = loginUser.getTags();
+        List<String> currentUserTagList = gson.fromJson(currentUserTags, new TypeToken<List<String>>() {
+        }.getType());
+        if (StringUtils.isBlank(currentUserTags) || StringUtils.isEmpty(currentUserTags) || CollectionUtils.isEmpty(currentUserTagList)) {
+            getDefaultTopN(num);
+        }
+        //用户有标签,取出所有的用户，然后依次和当前用户进行匹配【匹配方式：通过标签进行一个相似度计算（编辑距离算法）】
+        //todo查询所有，查询数据库很慢，内存不足【只查询需要的字段id、tags，不查询tags为null的】
+        QueryWrapper<User> queryWrapper = new QueryWrapper<>();
+        queryWrapper.isNotNull("tags");
+        queryWrapper.select("id","tags");
+        List<User> userList = this.list(queryWrapper);//todo userList:100w?
+        //idDistacneList存储了所有有标签用户对应的id、tags，包括那些相似度低的用户（没必要，浪费内存空间）
+        //解决方法：维护固定长度的数组或者有序集合，以时间换空间【matchTopN接口】
+        List<Pair<Long,Long>> idDistacneList = new ArrayList<>();
+        for (int i = 0; i < userList.size(); i++) {
+            User user = userList.get(i);
+            String userTags = user.getTags();
+            Long userId = user.getId();
+            List<String> userTagList = gson.fromJson(userTags, new TypeToken<List<String>>() {
+            }.getType());
+            //1.排除和自己匹配。2.没有标签列表的用户没必要匹配
+            if (loginUser.getId().equals(userId)
+                    ||StringUtils.isBlank(userTags)
+                    || StringUtils.isEmpty(userTags)
+                    || CollectionUtils.isEmpty(userTagList)) {
+                continue;
+            }
+            long distance = AlgorithmUtils.minDistance(currentUserTagList, userTagList);//编辑距离算法，距离越小，越相似
+            //需暂时保存distance和对应的用户【Pair<Long,Long>：id——distance,id代表用户节省内存空间】
+            idDistacneList.add(new Pair<>(userId,distance));
+        }
+        //给List列表排序(user1->user2，distance小到大)，并取TOP N
+        List<Long> idSortedList = idDistacneList.stream()
+                .sorted((user1, user2) -> (int)(user1.getValue() - user2.getValue()))
+                .limit(num)
+                .map(Pair::getKey)
+                .collect(Collectors.toList());
+        return getSortedUserBySortedList(idSortedList);
+    }
+
+    /**
+     * 通过指定id列表获取对应顺序的脱敏用户列表
+     * @param idSortedList
+     * @return
+     */
+    @NotNull
+    private List<UserVO> getSortedUserBySortedList(List<Long> idSortedList) {
+        QueryWrapper<User> queryWrapper = new QueryWrapper<>();
+        queryWrapper.in("id", idSortedList);//查询后的用户列表无序
+        //解决办法：通过stream流的分组功能，按用户id进行分组得到一个map，进而给每个用户添加一个key=id的标识
+        List<User> list = this.list(queryWrapper);
+        if (CollectionUtils.isEmpty(list)) {
+            throw new BusinessException(ErrorCode.NOT_FOUND_ERROR);
+        }
+        Map<Long, List<UserVO>> idUserMap = list.stream()
+                .map(this::getUserVO)
+                .collect(Collectors.groupingBy(UserVO::getId));
+        //按照有序的idSortedList，从无序的map中取元素，得到一个有序的用户列表
+        return idSortedList.stream().map(sortedId -> {
+            return idUserMap.get(sortedId).get(0);//id是唯一的,分组后key对应的List<UseVO>只有一个元素
+        }).collect(Collectors.toList());
+    }
+
+
+    @Override
+    public List<UserVO> matchTopN(Integer num, User loginUser) {
+        //tags标签列表json字符串=>标签列表对象
+        Gson gson = new Gson();
+        String currentUserTags = loginUser.getTags();
+        List<String> currentUserTagList = gson.fromJson(currentUserTags, new TypeToken<List<String>>() {
+        }.getType());
+        if (StringUtils.isBlank(currentUserTags) || StringUtils.isEmpty(currentUserTags) || CollectionUtils.isEmpty(currentUserTagList)) {
+          getDefaultTopN(num);
+        }
+        QueryWrapper<User> queryWrapper = new QueryWrapper<>();
+        queryWrapper.isNotNull("tags");
+        queryWrapper.select("id","tags");
+        List<User> userList = this.list(queryWrapper);//todo userList:100w?
+        //匹配所有用户
+        //使用排序树(分数 -> 用户列表)
+        SortedMap<Long, List<User>> distanceUserIdSortedMap = new TreeMap<>();//默认升序(key)
+        for (User user : userList) {
+            String userTags = user.getTags();
+            Long userId = user.getId();
+            List<String> userTagList = gson.fromJson(userTags, new TypeToken<List<String>>() {
+            }.getType());
+            //1.排除和自己匹配。2.没有标签列表的用户没必要匹配
+            if (loginUser.getId().equals(userId)
+                    ||StringUtils.isBlank(userTags)
+                    || StringUtils.isEmpty(userTags)
+                    || CollectionUtils.isEmpty(userTagList)) {
+                continue;
+            }
+            long distance = AlgorithmUtils.minDistance(currentUserTagList, userTagList);//编辑距离算法，距离越小，越相似
+            // 将map中的所有用户id查出(合并流)，判断是否已满
+            List<User> userSortedList = distanceUserIdSortedMap.values().stream()
+                    .flatMap(Collection::stream)
+                    .collect(Collectors.toList());
+            if (userSortedList.size() >= num) {//已满，替换相似度最低的用户
+                Long highestScore = distanceUserIdSortedMap.lastKey();
+                // 如果分数小于则替换最大分数用户
+                if (distance < highestScore) {
+                    //map的compute方法（线程安全），map.compute(key,(k,v)->{})会把map中原来的key-value作为实参传给函数式接口的(k,v)
+                    //该函数式接口有点像过滤，它会保留返回的，把未返回的k-v给删掉。那些返回的新值会map中对应的旧值给替换掉
+                    distanceUserIdSortedMap.compute(highestScore, (score, mapUserIdList) -> {
+                        // 分数对应的用户id只有一个时，直接删除该分数对应的所有
+                        if (mapUserIdList.size() == 1) {
+                            // 表示删除键和值
+                            return null;
+                        } else {
+                            // 该分数对应多个用户id时，删除其中一个
+                            mapUserIdList.remove(0);
+                            return mapUserIdList;//新值（删了一个用户）替换旧值
+                        }
+                    });
+                    //map添加更相似的用户
+                    addScoreUser(distanceUserIdSortedMap, distance, user);
+                    //distanceUserIdSortedMap.values().forEach(System.out::println);
+                }
+            } else {
+                // 未满
+                addScoreUser(distanceUserIdSortedMap, distance, user);
+            }
+        }
+        List<User> sortedlist = distanceUserIdSortedMap.values().stream()
+                .flatMap(Collection::stream)
+                .collect(Collectors.toList());
+        List<Long> idList = sortedlist.stream().map(User::getId).collect(Collectors.toList());
+        return getSortedUserBySortedList(idList);
+    }
+
+    /**
+     * 排序树添加用户
+     *
+     * @param distanceUserIdSortedMap 排序树
+     * @param distance       距离
+     * @param user      用户
+     */
+    private static void addScoreUser(SortedMap<Long, List<User>> distanceUserIdSortedMap, Long distance,User user) {
+        //存在，则添加
+        distanceUserIdSortedMap.computeIfPresent(distance, (k, v) -> {
+            v.add(user);
+            return v;
+        });
+        //不存在，则添加
+        distanceUserIdSortedMap.computeIfAbsent(distance, (k) ->
+                distanceUserIdSortedMap.put(distance, new ArrayList<>(Arrays.asList(user))));
+    }
 
     // endregion
 
@@ -548,6 +643,4 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
             throw new BusinessException(ErrorCode.PARAMS_ERROR);
         }
     }
-
-
 }

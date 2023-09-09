@@ -173,11 +173,22 @@ public interface UserService extends IService<User> {
 
     /**
      * 找朋友
+     * List<Pair<Long,Long>>存储所有匹配的朋友，比较耗空间（用户量大时）
      * @param num 找多少个兴趣最接近的朋友
      * @param loginUser
      * @return
      */
     List<UserVO> matchUser(Integer num,User loginUser);
+
+    /**
+     * 找朋友
+     * 维护了固定长度的数组或者有序集合（排序树，treeMap），以时间换空间
+     * （当然map也比较占用空间）
+     * @param num 找多少个兴趣最接近的朋友
+     * @param loginUser
+     * @return
+     */
+    public List<UserVO> matchTopN(Integer num, User loginUser);
 
     // endregion
 

@@ -358,7 +358,7 @@ public class UserController {
     @GetMapping("/match")
     public BaseResponse<List<UserVO>> matchUser(Integer num,HttpServletRequest request) {
         User loginUser = userService.getLoginUser(request);
-        List<UserVO> matchUserList =userService.matchUser(num,loginUser);
+        List<UserVO> matchUserList =userService.matchTopN(num,loginUser);
         return ResultUtils.success(matchUserList);
     }
 }
