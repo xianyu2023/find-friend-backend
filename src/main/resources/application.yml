@@ -89,3 +89,8 @@ cos:
     secretKey: xxx
     region: xxx
     bucket: xxx
+xianyu:
+  client:
+    user:
+      access-key: xianyu
+      secret-key: 123456
